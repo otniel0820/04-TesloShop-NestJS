@@ -5,6 +5,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Product } from './entities/product.entity';
 import { Repository } from 'typeorm';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
+import { validate as isUUID } from 'uuid';
 
 @Injectable()
 export class ProductsService {
@@ -43,7 +44,6 @@ export class ProductsService {
     
   }
 
-  //Todo: pagination
   findAll(paginationDto: PaginationDto) {
     const {limit=10, offset=0}= paginationDto
     return this.producRepository.find({
@@ -53,11 +53,24 @@ export class ProductsService {
     })
   }
 
-  async findOne(id: string) {
-    
-    const product = await this.producRepository.findOneBy({id})
+  async findOne(term: string) {
+    let product: Product;
+
+    if(isUUID(term)){
+      product = await this.producRepository.findOneBy({id: term})
+    }else{
+      //Con este query builder podemos buscar nuestro producto por titulo y slug sin que nos hagan inyeccion de dependencia a nuestra base de datos le mandamos en el where el title en UPPER para que pueda aceptar ambas terminos e igual nos da el resultadod el producto
+      const queryBuilder= this.producRepository.createQueryBuilder()
+      product = await queryBuilder
+      .where(`UPPER(title) =:title or slug =:slug`,{
+        title: term.toUpperCase(),
+        slug: term.toLowerCase()
+      }).getOne();
+
+    }
+  
     if(!product){
-      throw new NotFoundException(`Product with id "${id}" not found`)
+      throw new NotFoundException(`Product with term "${term}" not found`)
   }
 
   return product
