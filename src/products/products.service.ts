@@ -6,6 +6,7 @@ import { Product } from './entities/product.entity';
 import { Repository } from 'typeorm';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { validate as isUUID } from 'uuid';
+import { ProductImage } from './entities';
 
 @Injectable()
 export class ProductsService {
@@ -13,7 +14,9 @@ export class ProductsService {
   private readonly logger = new Logger('ProductsService');
   constructor(
     @InjectRepository(Product)
-    private readonly producRepository: Repository<Product>
+    private readonly producRepository: Repository<Product>,
+    @InjectRepository(ProductImage)
+    private readonly producImageRepository: Repository<ProductImage>
   ){}
 
 
@@ -33,10 +36,14 @@ export class ProductsService {
       //   .replaceAll(' ', '_')
       //   .replaceAll("'", '');
       // }
-      const product = this.producRepository.create(createProductDto);
+      const {images= [], ...productDetails} = createProductDto
+      const product = this.producRepository.create({
+        ...productDetails,
+        images: images.map(image=> this.producImageRepository.create({url: image}))
+      });
       await this.producRepository.save(product);
 
-      return product
+      return {...product, images}
     } catch (error) {
       this.handleDBExceptions(error)
       
@@ -44,13 +51,21 @@ export class ProductsService {
     
   }
 
-  findAll(paginationDto: PaginationDto) {
+  async findAll(paginationDto: PaginationDto) {
     const {limit=10, offset=0}= paginationDto
-    return this.producRepository.find({
+    const products = await this.producRepository.find({
       take: limit,
       skip: offset,
-      //Todo: relaciones
+      relations: {
+        images: true
+      }
+      
     })
+
+    return products.map(({images, ...rest}) => ({
+      ...rest,
+      images: images.map(img => img.url)
+    }))
   }
 
   async findOne(term: string) {
@@ -60,12 +75,14 @@ export class ProductsService {
       product = await this.producRepository.findOneBy({id: term})
     }else{
       //Con este query builder podemos buscar nuestro producto por titulo y slug sin que nos hagan inyeccion de dependencia a nuestra base de datos le mandamos en el where el title en UPPER para que pueda aceptar ambas terminos e igual nos da el resultadod el producto
-      const queryBuilder= this.producRepository.createQueryBuilder()
+      const queryBuilder= this.producRepository.createQueryBuilder('Product')
       product = await queryBuilder
       .where(`UPPER(title) =:title or slug =:slug`,{
         title: term.toUpperCase(),
         slug: term.toLowerCase()
-      }).getOne();
+      })
+      .leftJoinAndSelect('Product.images','ProductImages')
+      .getOne();
 
     }
   
@@ -76,12 +93,21 @@ export class ProductsService {
   return product
 }
   
+async findOnePlain(term:string){
+  const {images=[], ...rest} = await this.findOne(term)
+  return {
+    ...rest,
+    images: images.map(img => img.url)
+
+  }
+}
 
   async update(id: string, updateProductDto: UpdateProductDto) {
     
     const product = await this.producRepository.preload({
       id: id,
       ...updateProductDto,
+      images: []
     })
     
     if(!product) throw new NotFoundException(`Product with id "${id}" not found`);
