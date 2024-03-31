@@ -3,7 +3,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Product } from './entities/product.entity';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { PaginationDto } from 'src/common/dto/pagination.dto';
 import { validate as isUUID } from 'uuid';
 import { ProductImage } from './entities';
@@ -14,9 +14,12 @@ export class ProductsService {
   private readonly logger = new Logger('ProductsService');
   constructor(
     @InjectRepository(Product)
-    private readonly producRepository: Repository<Product>,
+    private readonly productRepository: Repository<Product>,
     @InjectRepository(ProductImage)
-    private readonly producImageRepository: Repository<ProductImage>
+    private readonly productImageRepository: Repository<ProductImage>,
+
+    private readonly dataSource: DataSource,
+
   ){}
 
 
@@ -37,11 +40,11 @@ export class ProductsService {
       //   .replaceAll("'", '');
       // }
       const {images= [], ...productDetails} = createProductDto
-      const product = this.producRepository.create({
+      const product = this.productRepository.create({
         ...productDetails,
-        images: images.map(image=> this.producImageRepository.create({url: image}))
+        images: images.map(image=> this.productImageRepository.create({url: image}))
       });
-      await this.producRepository.save(product);
+      await this.productRepository.save(product);
 
       return {...product, images}
     } catch (error) {
@@ -53,7 +56,7 @@ export class ProductsService {
 
   async findAll(paginationDto: PaginationDto) {
     const {limit=10, offset=0}= paginationDto
-    const products = await this.producRepository.find({
+    const products = await this.productRepository.find({
       take: limit,
       skip: offset,
       relations: {
@@ -72,10 +75,10 @@ export class ProductsService {
     let product: Product;
 
     if(isUUID(term)){
-      product = await this.producRepository.findOneBy({id: term})
+      product = await this.productRepository.findOneBy({id: term})
     }else{
       //Con este query builder podemos buscar nuestro producto por titulo y slug sin que nos hagan inyeccion de dependencia a nuestra base de datos le mandamos en el where el title en UPPER para que pueda aceptar ambas terminos e igual nos da el resultadod el producto
-      const queryBuilder= this.producRepository.createQueryBuilder('Product')
+      const queryBuilder= this.productRepository.createQueryBuilder('Product')
       product = await queryBuilder
       .where(`UPPER(title) =:title or slug =:slug`,{
         title: term.toUpperCase(),
@@ -103,19 +106,38 @@ async findOnePlain(term:string){
 }
 
   async update(id: string, updateProductDto: UpdateProductDto) {
+
+    const {images, ...toUpdate}=updateProductDto
     
-    const product = await this.producRepository.preload({
-      id: id,
-      ...updateProductDto,
-      images: []
+    const product = await this.productRepository.preload({
+      id,
+      ...toUpdate
     })
     
     if(!product) throw new NotFoundException(`Product with id "${id}" not found`);
+
+    //Create Query Runner
+
+    const queryRunner = this.dataSource.createQueryRunner();
+
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
     try {
-      await this.producRepository.save(product)
-      return product
+      if(images){
+        await queryRunner.manager.delete(ProductImage,{product: {id}})
+        product.images = images.map(image=> this.productImageRepository.create({url: image}))
+      }
+      await queryRunner.manager.save(product)
+
+      // await this.productRepository.save(product)
+      await queryRunner.commitTransaction()
+      await queryRunner.release()
+      return this.findOnePlain(id)
       
     } catch (error) {
+      await queryRunner.rollbackTransaction()
+      await queryRunner.release()
       this.handleDBExceptions(error)
     }
 
@@ -124,7 +146,7 @@ async findOnePlain(term:string){
 
   async remove(id: string) {
     const product = await this.findOne(id)
-    await this.producRepository.remove(product)
+    await this.productRepository.remove(product)
     
   }
 
@@ -135,5 +157,18 @@ async findOnePlain(term:string){
     this.logger.error(error)
     throw new InternalServerErrorException('Unexpected error, check server logs')
 
+  }
+
+  async deleteAllProducts(){
+    const query = this.productRepository.createQueryBuilder('product')
+
+    try {
+      return await query
+      .delete()
+      .where({})
+      .execute();
+    } catch (error) {
+      this.handleDBExceptions(error)
+    }
   }
 }

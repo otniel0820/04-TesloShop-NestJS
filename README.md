@@ -15,8 +15,11 @@ npm i
 ```
 docker-compose up -d
 ```
-6. Ejecutar proyecto
+6. Ejecutar Seed para llenar la base de datos
+```
+http://localhost:3000/api/seed
+```
+7. Ejecutar proyecto
 ```
 npm run start:dev
 ```
-
